@@ -5,7 +5,7 @@
 <script>
 export default {
   async mounted() {
-    await this.$nextTick();
+    await import("plotly");
     this.update();
   },
   updated() {
@@ -23,10 +23,48 @@ export default {
         Plotly.react(this.$el.id, this.options.data, this.options.layout);
       } else {
         Plotly.newPlot(this.$el.id, this.options.data, this.options.layout, options.config);
+        this.set_handlers();
       }
 
       // store last options
       this.last_options = options;
+    },
+    set_handlers() {
+      // forward events
+      for (const name of [
+        // source: https://plotly.com/javascript/plotlyjs-events/
+        "plotly_click",
+        "plotly_legendclick",
+        "plotly_selecting",
+        "plotly_selected",
+        "plotly_hover",
+        "plotly_unhover",
+        "plotly_legenddoubleclick",
+        "plotly_restyle",
+        "plotly_relayout",
+        "plotly_webglcontextlost",
+        "plotly_afterplot",
+        "plotly_autosize",
+        "plotly_deselect",
+        "plotly_doubleclick",
+        "plotly_redraw",
+        "plotly_animated",
+      ]) {
+        this.$el.on(name, (event) => {
+          const args = {
+            ...event,
+            points: event?.points?.map((p) => ({
+              ...p,
+              fullData: undefined,
+              xaxis: undefined,
+              yaxis: undefined,
+            })),
+            xaxes: undefined,
+            yaxes: undefined,
+          };
+          this.$emit(name, args);
+        });
+      }
     },
   },
   data() {
@@ -53,5 +91,11 @@ export default {
 }
 .js-plotly-plot .plotly .modebar-btn svg {
   position: static;
+}
+/*
+  fix overflow when adding borders to the plotly plot
+*/
+.js-plotly-plot {
+  box-sizing: content-box;
 }
 </style>

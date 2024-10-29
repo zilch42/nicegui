@@ -9,9 +9,18 @@ export default {
     last_content: "",
   }),
   mounted() {
+    this.initialize();
     this.update(this.content);
   },
   methods: {
+    initialize() {
+      try {
+        mermaid.initialize(this.config || {});
+      } catch (error) {
+        console.error(error);
+        this.$emit("error", error);
+      }
+    },
     async update(content) {
       if (this.last_content === content) return;
       this.last_content = content;
@@ -21,12 +30,18 @@ export default {
       if (is_running) return;
       is_running = true;
       while (queue.length) {
-        await mermaid.run({ nodes: [queue.shift()] });
+        try {
+          await mermaid.run({ nodes: [queue.shift()] });
+        } catch (error) {
+          console.error(error);
+          this.$emit("error", error);
+        }
       }
       is_running = false;
     },
   },
   props: {
+    config: Object,
     content: String,
   },
 };

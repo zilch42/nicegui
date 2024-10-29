@@ -5,16 +5,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict
 
+import socketio
 from fastapi import HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi_socketio import SocketManager
 
-from . import air, background_tasks, binding, core, favicon, helpers, json, outbox, run
+from . import air, background_tasks, binding, core, favicon, helpers, json, run, welcome
 from .app import App
 from .client import Client
-from .dependencies import js_components, libraries
+from .dependencies import js_components, libraries, resources
 from .error import error_content
 from .json import NiceGUIJSONResponse
 from .logging import log
@@ -26,14 +26,30 @@ from .version import __version__
 
 @asynccontextmanager
 async def _lifespan(_: App):
-    _startup()
+    await _startup()
     yield
     await _shutdown()
 
+
+class SocketIoApp(socketio.ASGIApp):
+    """Custom ASGI app to handle root_path.
+
+    This is a workaround for https://github.com/miguelgrinberg/python-engineio/pull/345
+    """
+
+    async def __call__(self, scope, receive, send):
+        root_path = scope.get('root_path')
+        if root_path and scope['path'].startswith(root_path):
+            scope['path'] = scope['path'][len(root_path):]
+        return await super().__call__(scope, receive, send)
+
+
 core.app = app = App(default_response_class=NiceGUIJSONResponse, lifespan=_lifespan)
 # NOTE we use custom json module which wraps orjson
-socket_manager = SocketManager(app=app, mount_location='/_nicegui_ws/', json=json)
-core.sio = sio = socket_manager._sio  # pylint: disable=protected-access
+core.sio = sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*', json=json)
+sio_app = SocketIoApp(socketio_server=sio, socketio_path='/socket.io')
+app.mount('/_nicegui_ws/', sio_app)
+
 
 mimetypes.add_type('text/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
@@ -46,7 +62,7 @@ static_files = StaticFiles(
 )
 app.mount(f'/_nicegui/{__version__}/static', static_files, name='static')
 
-Client.auto_index_client = Client(page('/'), shared=True).__enter__()  # pylint: disable=unnecessary-dunder-call
+Client.auto_index_client = Client(page('/'), request=None).__enter__()  # pylint: disable=unnecessary-dunder-call
 
 
 @app.get('/')
@@ -76,9 +92,23 @@ def _get_component(key: str) -> FileResponse:
     raise HTTPException(status_code=404, detail=f'component "{key}" not found')
 
 
-def _startup() -> None:
+@app.get(f'/_nicegui/{__version__}' + '/resources/{key}/{path:path}')
+def _get_resource(key: str, path: str) -> FileResponse:
+    if key in resources:
+        filepath = resources[key].path / path
+        try:
+            filepath.resolve().relative_to(resources[key].path.resolve())  # NOTE: use is_relative_to() in Python 3.9
+        except ValueError as e:
+            raise HTTPException(status_code=403, detail='forbidden') from e
+        if filepath.exists():
+            headers = {'Cache-Control': 'public, max-age=3600'}
+            media_type, _ = mimetypes.guess_type(filepath)
+            return FileResponse(filepath, media_type=media_type, headers=headers)
+    raise HTTPException(status_code=404, detail=f'resource "{key}" not found')
+
+
+async def _startup() -> None:
     """Handle the startup event."""
-    # NOTE ping interval and timeout need to be lower than the reconnect timeout, but can't be too low
     if not app.config.has_run_config:
         raise RuntimeError('\n\n'
                            'You must call ui.run() to start the server.\n'
@@ -87,6 +117,8 @@ def _startup() -> None:
                            'remove the guard or replace it with\n'
                            '   if __name__ in {"__main__", "__mp_main__"}:\n'
                            'to allow for multiprocessing.')
+    await welcome.collect_urls()
+    # NOTE ping interval and timeout need to be lower than the reconnect timeout, but can't be too low
     sio.eio.ping_interval = max(app.config.reconnect_timeout * 0.8, 4)
     sio.eio.ping_timeout = max(app.config.reconnect_timeout * 0.4, 2)
     if core.app.config.favicon:
@@ -99,9 +131,9 @@ def _startup() -> None:
     core.loop = asyncio.get_running_loop()
     app.start()
     background_tasks.create(binding.refresh_loop(), name='refresh bindings')
-    background_tasks.create(outbox.loop(air.instance), name='send outbox')
     background_tasks.create(Client.prune_instances(), name='prune clients')
     background_tasks.create(Slot.prune_stacks(), name='prune slot stacks')
+    background_tasks.create(core.app.storage.prune_tab_storage(), name='prune tab storage')
     air.connect()
 
 
@@ -109,15 +141,15 @@ async def _shutdown() -> None:
     """Handle the shutdown event."""
     if app.native.main_window:
         app.native.main_window.signal_server_shutdown()
+    air.disconnect()
     app.stop()
     run.tear_down()
-    air.disconnect()
 
 
 @app.exception_handler(404)
 async def _exception_handler_404(request: Request, exception: Exception) -> Response:
     log.warning(f'{request.url} not found')
-    with Client(page('')) as client:
+    with Client(page(''), request=request) as client:
         error_content(404, exception)
     return client.build_response(request, 404)
 
@@ -125,18 +157,22 @@ async def _exception_handler_404(request: Request, exception: Exception) -> Resp
 @app.exception_handler(Exception)
 async def _exception_handler_500(request: Request, exception: Exception) -> Response:
     log.exception(exception)
-    with Client(page('')) as client:
+    with Client(page(''), request=request) as client:
         error_content(500, exception)
     return client.build_response(request, 500)
 
 
 @sio.on('handshake')
-async def _on_handshake(sid: str, client_id: str) -> bool:
-    client = Client.instances.get(client_id)
+async def _on_handshake(sid: str, data: Dict[str, str]) -> bool:
+    client = Client.instances.get(data['client_id'])
     if not client:
         return False
-    client.environ = sio.get_environ(sid)
-    await sio.enter_room(sid, client.id)
+    client.tab_id = data['tab_id']
+    if sid[:5].startswith('test-'):
+        client.environ = {'asgi.scope': {'description': 'test client', 'type': 'test'}}
+    else:
+        client.environ = sio.get_environ(sid)
+        await sio.enter_room(sid, client.id)
     client.handle_handshake()
     return True
 

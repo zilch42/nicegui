@@ -1,10 +1,14 @@
 import inspect
+import os
+import platform
+import signal
+import urllib
 from enum import Enum
 from pathlib import Path
 from typing import Any, Awaitable, Callable, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import background_tasks, helpers
@@ -15,7 +19,7 @@ from ..observables import ObservableSet
 from ..server import Server
 from ..storage import Storage
 from .app_config import AppConfig
-from .streaming_response import get_streaming_response
+from .range_response import get_range_response
 
 
 class State(Enum):
@@ -28,7 +32,7 @@ class State(Enum):
 class App(FastAPI):
 
     def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
+        super().__init__(**kwargs, docs_url=None, redoc_url=None, openapi_url=None)
         self.native = NativeConfig()
         self.storage = Storage()
         self.urls = ObservableSet()
@@ -123,16 +127,19 @@ class App(FastAPI):
         """Shut down NiceGUI.
 
         This will programmatically stop the server.
-        Only possible when auto-reload is disabled.
         """
-        if self.config.reload:
-            raise RuntimeError('calling shutdown() is not supported when auto-reload is enabled')
         if self.native.main_window:
             self.native.main_window.destroy()
+        if self.config.reload:
+            os.kill(os.getppid(), getattr(signal, 'CTRL_C_EVENT' if platform.system() == 'Windows' else 'SIGINT'))
         else:
             Server.instance.should_exit = True
 
-    def add_static_files(self, url_path: str, local_directory: Union[str, Path]) -> None:
+    def add_static_files(self,
+                         url_path: str,
+                         local_directory: Union[str, Path],
+                         *,
+                         follow_symlink: bool = False) -> None:
         """Add a directory of static files.
 
         `add_static_files()` makes a local directory available at the specified endpoint, e.g. `'/static'`.
@@ -145,10 +152,16 @@ class App(FastAPI):
 
         :param url_path: string that starts with a slash "/" and identifies the path at which the files should be served
         :param local_directory: local folder with files to serve as static content
+        :param follow_symlink: whether to follow symlinks (default: False)
         """
         if url_path == '/':
             raise ValueError('''Path cannot be "/", because it would hide NiceGUI's internal "/_nicegui" route.''')
-        self.mount(url_path, StaticFiles(directory=str(local_directory)))
+
+        handler = StaticFiles(directory=local_directory, follow_symlink=follow_symlink)
+
+        @self.get(url_path + '/{path:path}')
+        async def static_file(request: Request, path: str = '') -> Response:
+            return await handler.get_response(path, request.scope)
 
     def add_static_file(self, *,
                         local_file: Union[str, Path],
@@ -166,7 +179,7 @@ class App(FastAPI):
         :param local_file: local file to serve as static content
         :param url_path: string that starts with a slash "/" and identifies the path at which the file should be served (default: None -> auto-generated URL path)
         :param single_use: whether to remove the route after the file has been downloaded once (default: False)
-        :return: URL path which can be used to access the file
+        :return: encoded URL which can be used to access the file
         """
         file = Path(local_file).resolve()
         if not file.is_file():
@@ -179,7 +192,7 @@ class App(FastAPI):
                 self.remove_route(path)
             return FileResponse(file, headers={'Cache-Control': 'public, max-age=3600'})
 
-        return path
+        return urllib.parse.quote(path)
 
     def add_media_files(self, url_path: str, local_directory: Union[str, Path]) -> None:
         """Add directory of media files.
@@ -196,11 +209,11 @@ class App(FastAPI):
         :param local_directory: local folder with files to serve as media content
         """
         @self.get(url_path + '/{filename:path}')
-        def read_item(request: Request, filename: str) -> StreamingResponse:
+        def read_item(request: Request, filename: str, nicegui_chunk_size: int = 8192) -> Response:
             filepath = Path(local_directory) / filename
             if not filepath.is_file():
                 raise HTTPException(status_code=404, detail='Not Found')
-            return get_streaming_response(filepath, request)
+            return get_range_response(filepath, request, chunk_size=nicegui_chunk_size)
 
     def add_media_file(self, *,
                        local_file: Union[str, Path],
@@ -218,7 +231,7 @@ class App(FastAPI):
         :param local_file: local file to serve as media content
         :param url_path: string that starts with a slash "/" and identifies the path at which the file should be served (default: None -> auto-generated URL path)
         :param single_use: whether to remove the route after the media file has been downloaded once (default: False)
-        :return: URL path which can be used to access the file
+        :return: encoded URL which can be used to access the file
         """
         file = Path(local_file).resolve()
         if not file.is_file():
@@ -226,12 +239,12 @@ class App(FastAPI):
         path = f'/_nicegui/auto/media/{helpers.hash_file_path(file)}/{file.name}' if url_path is None else url_path
 
         @self.get(path)
-        def read_item(request: Request) -> StreamingResponse:
+        def read_item(request: Request, nicegui_chunk_size: int = 8192) -> Response:
             if single_use:
                 self.remove_route(path)
-            return get_streaming_response(file, request)
+            return get_range_response(file, request, chunk_size=nicegui_chunk_size)
 
-        return path
+        return urllib.parse.quote(path)
 
     def remove_route(self, path: str) -> None:
         """Remove routes with the given path."""

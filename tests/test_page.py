@@ -1,12 +1,13 @@
 import asyncio
+import re
+from typing import Optional
 from uuid import uuid4
 
 from fastapi.responses import PlainTextResponse
 from selenium.webdriver.common.by import By
 
-from nicegui import Client, background_tasks, ui
-
-from .screen import Screen
+from nicegui import background_tasks, ui
+from nicegui.testing import Screen
 
 
 def test_page(screen: Screen):
@@ -102,22 +103,24 @@ def test_shared_and_private_pages(screen: Screen):
 
 
 def test_wait_for_connected(screen: Screen):
-    label: ui.label
+    label: Optional[ui.label] = None
 
     async def load() -> None:
+        assert label
         label.text = 'loading...'
         # NOTE we can not use asyncio.create_task() here because we are on a different thread than the NiceGUI event loop
         background_tasks.create(takes_a_while())
 
     async def takes_a_while() -> None:
         await asyncio.sleep(0.1)
+        assert label
         label.text = 'delayed data has been loaded'
 
     @ui.page('/')
-    async def page(client: Client):
+    async def page():
         nonlocal label
         label = ui.label()
-        await client.connected()
+        await ui.context.client.connected()
         await load()
 
     screen.open('/')
@@ -128,10 +131,10 @@ def test_wait_for_disconnect(screen: Screen):
     events = []
 
     @ui.page('/', reconnect_timeout=0)
-    async def page(client: Client):
-        await client.connected()
+    async def page():
+        await ui.context.client.connected()
         events.append('connected')
-        await client.disconnected()
+        await ui.context.client.disconnected()
         events.append('disconnected')
 
     screen.open('/')
@@ -145,8 +148,8 @@ def test_wait_for_disconnect_without_awaiting_connected(screen: Screen):
     events = []
 
     @ui.page('/', reconnect_timeout=0)
-    async def page(client: Client):
-        await client.disconnected()
+    async def page():
+        await ui.context.client.disconnected()
         events.append('disconnected')
 
     screen.open('/')
@@ -158,9 +161,9 @@ def test_wait_for_disconnect_without_awaiting_connected(screen: Screen):
 
 def test_adding_elements_after_connected(screen: Screen):
     @ui.page('/')
-    async def page(client: Client):
+    async def page():
         ui.label('before')
-        await client.connected()
+        await ui.context.client.connected()
         ui.label('after')
 
     screen.open('/')
@@ -181,8 +184,8 @@ def test_exception(screen: Screen):
 
 def test_exception_after_connected(screen: Screen):
     @ui.page('/')
-    async def page(client: Client):
-        await client.connected()
+    async def page():
+        await ui.context.client.connected()
         ui.label('this is shown')
         raise RuntimeError('some exception')
 
@@ -202,9 +205,9 @@ def test_page_with_args(screen: Screen):
 
 def test_adding_elements_during_onconnect(screen: Screen):
     @ui.page('/')
-    def page(client: Client):
+    def page():
         ui.label('Label 1')
-        client.on_connect(lambda: ui.label('Label 2'))
+        ui.context.client.on_connect(lambda: ui.label('Label 2'))
 
     screen.open('/')
     screen.should_contain('Label 2')
@@ -212,11 +215,11 @@ def test_adding_elements_during_onconnect(screen: Screen):
 
 def test_async_connect_handler(screen: Screen):
     @ui.page('/')
-    def page(client: Client):
+    def page():
         async def run_js():
             result.text = await ui.run_javascript('41 + 1')
         result = ui.label()
-        client.on_connect(run_js)
+        ui.context.client.on_connect(run_js)
 
     screen.open('/')
     screen.should_contain('42')
@@ -286,6 +289,18 @@ def test_returning_custom_response_async(screen: Screen):
     screen.should_not_contain('normal NiceGUI page')
 
 
+def test_warning_about_to_late_responses(screen: Screen):
+    @ui.page('/')
+    async def page():
+        await ui.context.client.connected()
+        ui.label('NiceGUI page')
+        return PlainTextResponse('custom response')
+
+    screen.open('/')
+    screen.should_contain('NiceGUI page')
+    screen.assert_py_logger('ERROR', re.compile('it was returned after the HTML had been delivered to the client'))
+
+
 def test_reconnecting_without_page_reload(screen: Screen):
     @ui.page('/', reconnect_timeout=3.0)
     def page():
@@ -298,3 +313,12 @@ def test_reconnecting_without_page_reload(screen: Screen):
     screen.wait(2.0)
     element = screen.selenium.find_element(By.XPATH, '//*[@aria-label="Input"]')
     assert element.get_attribute('value') == 'hello', 'input should be preserved after reconnect (i.e. no page reload)'
+
+
+def test_ip(screen: Screen):
+    @ui.page('/')
+    def page():
+        ui.label(ui.context.client.ip or 'unknown')
+
+    screen.open('/')
+    screen.should_contain('127.0.0.1')

@@ -1,11 +1,11 @@
 from pathlib import Path
 from typing import Union
 
-from .. import core
-from ..element import Element
+from .mixins.source_element import SourceElement
 
 
-class Audio(Element, component='audio.js'):
+class Audio(SourceElement, component='audio.js'):
+    SOURCE_IS_MEDIA_FILE = True
 
     def __init__(self, src: Union[str, Path], *,
                  controls: bool = True,
@@ -26,14 +26,14 @@ class Audio(Element, component='audio.js'):
         See `here <https://developer.mozilla.org/en-US/docs/Web/HTML/Element/audio#events>`_
         for a list of events you can subscribe to using the generic event subscription `on()`.
         """
-        super().__init__()
-        if Path(src).is_file():
-            src = core.app.add_media_file(local_file=src)
-        self._props['src'] = src
+        super().__init__(source=src)
         self._props['controls'] = controls
         self._props['autoplay'] = autoplay
         self._props['muted'] = muted
         self._props['loop'] = loop
+
+    def set_source(self, source: Union[str, Path]) -> None:
+        return super().set_source(source)
 
     def seek(self, seconds: float) -> None:
         """Seek to a specific position in the audio.

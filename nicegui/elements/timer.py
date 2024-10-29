@@ -1,9 +1,10 @@
 import asyncio
 import time
 from contextlib import nullcontext
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
-from .. import background_tasks, core, helpers
+from .. import background_tasks, core
+from ..awaitable_response import AwaitableResponse
 from ..binding import BindableProperty
 from ..client import Client
 from ..element import Element
@@ -91,7 +92,7 @@ class Timer(Element, component='timer.js'):
         try:
             assert self.callback is not None
             result = self.callback()
-            if helpers.is_coroutine_function(self.callback):
+            if isinstance(result, Awaitable) and not isinstance(result, AwaitableResponse):
                 await result
         except Exception as e:
             core.app.handle_exception(e)
@@ -124,3 +125,9 @@ class Timer(Element, component='timer.js'):
 
     def _cleanup(self) -> None:
         self.callback = None
+        if not self._deleted:
+            assert self.parent_slot
+            self.parent_slot.parent.remove(self)
+
+    def set_visibility(self, visible: bool) -> None:
+        raise NotImplementedError('Use `activate()`, `deactivate()` or `cancel()`. See #3670 for more information.')

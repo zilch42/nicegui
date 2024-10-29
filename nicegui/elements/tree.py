@@ -2,12 +2,11 @@ from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Set
 
 from typing_extensions import Self
 
-from ..element import Element
 from ..events import GenericEventArguments, ValueChangeEventArguments, handle_event
-from ..logging import log
+from .mixins.filter_element import FilterElement
 
 
-class Tree(Element):
+class Tree(FilterElement):
 
     def __init__(self,
                  nodes: List[Dict], *,
@@ -35,18 +34,25 @@ class Tree(Element):
         :param on_expand: callback which is invoked when the node expansion changes
         :param on_tick: callback which is invoked when a node is ticked or unticked
         :param tick_strategy: whether and how to use checkboxes ("leaf", "leaf-filtered" or "strict"; default: ``None``)
-        :param default_expand_all: whether to expand all nodes by default (default: ``False``)
         """
-        super().__init__('q-tree')
+        super().__init__(tag='q-tree', filter=None)
         self._props['nodes'] = nodes
         self._props['node-key'] = node_key
         self._props['label-key'] = label_key
         self._props['children-key'] = children_key
-        self._props['selected'] = []
+        self._props['selected'] = None
         self._props['expanded'] = []
         self._props['ticked'] = []
         if tick_strategy is not None:
             self._props['tick-strategy'] = tick_strategy
+        self._select_handlers = [on_select] if on_select else []
+        self._expand_handlers = [on_expand] if on_expand else []
+        self._tick_handlers = [on_tick] if on_tick else []
+
+        # https://github.com/zauberzeug/nicegui/issues/1385
+        self._props.add_warning('default-expand-all',
+                                'The prop "default-expand-all" is not supported by `ui.tree`. '
+                                'Use ".expand()" instead.')
 
         def update_prop(name: str, value: Any) -> None:
             if self._props[name] != value:
@@ -55,18 +61,68 @@ class Tree(Element):
 
         def handle_selected(e: GenericEventArguments) -> None:
             update_prop('selected', e.args)
-            handle_event(on_select, ValueChangeEventArguments(sender=self, client=self.client, value=e.args))
+            for handler in self._select_handlers:
+                handle_event(handler, ValueChangeEventArguments(sender=self, client=self.client, value=e.args))
         self.on('update:selected', handle_selected)
 
         def handle_expanded(e: GenericEventArguments) -> None:
             update_prop('expanded', e.args)
-            handle_event(on_expand, ValueChangeEventArguments(sender=self, client=self.client, value=e.args))
+            for handler in self._expand_handlers:
+                handle_event(handler, ValueChangeEventArguments(sender=self, client=self.client, value=e.args))
         self.on('update:expanded', handle_expanded)
 
         def handle_ticked(e: GenericEventArguments) -> None:
             update_prop('ticked', e.args)
-            handle_event(on_tick, ValueChangeEventArguments(sender=self, client=self.client, value=e.args))
+            for handler in self._tick_handlers:
+                handle_event(handler, ValueChangeEventArguments(sender=self, client=self.client, value=e.args))
         self.on('update:ticked', handle_ticked)
+
+    def on_select(self, callback: Callable[..., Any]) -> Self:
+        """Add a callback to be invoked when the selection changes."""
+        self._select_handlers.append(callback)
+        return self
+
+    def select(self, node_key: Optional[str]) -> Self:
+        """Select the given node.
+
+        :param node_key: node key to select
+        """
+        if self._props['selected'] != node_key:
+            self._props['selected'] = node_key
+            self.update()
+        return self
+
+    def deselect(self) -> Self:
+        """Remove node selection."""
+        return self.select(None)
+
+    def on_expand(self, callback: Callable[..., Any]) -> Self:
+        """Add a callback to be invoked when the expansion changes."""
+        self._expand_handlers.append(callback)
+        return self
+
+    def on_tick(self, callback: Callable[..., Any]) -> Self:
+        """Add a callback to be invoked when a node is ticked or unticked."""
+        self._tick_handlers.append(callback)
+        return self
+
+    def tick(self, node_keys: Optional[List[str]] = None) -> Self:
+        """Tick the given nodes.
+
+        :param node_keys: list of node keys to tick or ``None`` to tick all nodes (default: ``None``)
+        """
+        self._props['ticked'][:] = self._find_node_keys(node_keys).union(self._props['ticked'])
+        self.update()
+        return self
+
+    def untick(self, node_keys: Optional[List[str]] = None) -> Self:
+        """Remove tick from the given nodes.
+
+        :param node_keys: list of node keys to untick or ``None`` to untick all nodes (default: ``None``)
+        """
+        self._props['ticked'][:] = set(self._props['ticked']).difference(self._find_node_keys(node_keys))
+        self.update()
+        return self
 
     def expand(self, node_keys: Optional[List[str]] = None) -> Self:
         """Expand the given nodes.
@@ -98,12 +154,3 @@ class Tree(Element):
                 yield node
                 yield from iterate_nodes(node.get(CHILDREN_KEY, []))
         return {node[NODE_KEY] for node in iterate_nodes(self._props['nodes'])}
-
-    def props(self, add: Optional[str] = None, *, remove: Optional[str] = None) -> Self:
-        super().props(add, remove=remove)
-        if 'default-expand-all' in self._props:
-            # https://github.com/zauberzeug/nicegui/issues/1385
-            del self._props['default-expand-all']
-            log.warning('The prop "default_expand_all" is not supported by `ui.tree`.\n'
-                        'Use ".expand()" instead.')
-        return self

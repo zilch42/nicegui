@@ -1,12 +1,12 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import List
 
 import pandas as pd
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 
 from nicegui import ui
-
-from .screen import Screen
+from nicegui.testing import Screen
 
 
 def test_update_table(screen: Screen):
@@ -90,52 +90,41 @@ def test_dynamic_method(screen: Screen):
     assert 48 <= heights[2] <= 50
 
 
-def test_call_api_method_with_argument(screen: Screen):
+def test_run_grid_method_with_argument(screen: Screen):
     grid = ui.aggrid({
         'columnDefs': [{'field': 'name', 'filter': True}],
         'rowData': [{'name': 'Alice'}, {'name': 'Bob'}, {'name': 'Carol'}],
     })
     filter_model = {'name': {'filterType': 'text', 'type': 'equals', 'filter': 'Alice'}}
-    ui.button('Filter', on_click=lambda: grid.call_api_method('setFilterModel', filter_model))
+    ui.button('Filter', on_click=lambda: grid.run_grid_method('setFilterModel', filter_model))
 
     screen.open('/')
     screen.should_contain('Alice')
     screen.should_contain('Bob')
     screen.should_contain('Carol')
     screen.click('Filter')
+    screen.wait(0.5)
     screen.should_contain('Alice')
     screen.should_not_contain('Bob')
     screen.should_not_contain('Carol')
 
 
-def test_call_column_api_method_with_argument(screen: Screen):
-    grid = ui.aggrid({
-        'columnDefs': [{'field': 'name'}, {'field': 'age', 'hide': True}],
-        'rowData': [{'name': 'Alice', 'age': '18'}, {'name': 'Bob', 'age': '21'}, {'name': 'Carol', 'age': '42'}],
-    })
-    ui.button('Show Age', on_click=lambda: grid.call_column_api_method('setColumnVisible', 'age', True))
-
-    screen.open('/')
-    screen.should_contain('Alice')
-    screen.should_not_contain('18')
-    screen.click('Show Age')
-    screen.should_contain('18')
-
-
 def test_get_selected_rows(screen: Screen):
-    grid = ui.aggrid({
-        'columnDefs': [{'field': 'name'}],
-        'rowData': [{'name': 'Alice'}, {'name': 'Bob'}, {'name': 'Carol'}],
-        'rowSelection': 'multiple',
-    })
+    @ui.page('/')
+    def page():
+        grid = ui.aggrid({
+            'columnDefs': [{'field': 'name'}],
+            'rowData': [{'name': 'Alice'}, {'name': 'Bob'}, {'name': 'Carol'}],
+            'rowSelection': 'multiple',
+        })
 
-    async def get_selected_rows():
-        ui.label(str(await grid.get_selected_rows()))
-    ui.button('Get selected rows', on_click=get_selected_rows)
+        async def get_selected_rows():
+            ui.label(str(await grid.get_selected_rows()))
+        ui.button('Get selected rows', on_click=get_selected_rows)
 
-    async def get_selected_row():
-        ui.label(str(await grid.get_selected_row()))
-    ui.button('Get selected row', on_click=get_selected_row)
+        async def get_selected_row():
+            ui.label(str(await grid.get_selected_row()))
+        ui.button('Get selected row', on_click=get_selected_row)
 
     screen.open('/')
     screen.click('Alice')
@@ -188,7 +177,7 @@ def test_create_dynamically(screen: Screen):
 
 def test_api_method_after_creation(screen: Screen):
     options = {'columnDefs': [{'field': 'name'}], 'rowData': [{'name': 'Alice'}]}
-    ui.button('Create', on_click=lambda: ui.aggrid(options).call_api_method('selectAll'))
+    ui.button('Create', on_click=lambda: ui.aggrid(options).run_grid_method('selectAll'))
 
     screen.open('/')
     screen.click('Create')
@@ -198,6 +187,7 @@ def test_api_method_after_creation(screen: Screen):
 def test_problematic_datatypes(screen: Screen):
     df = pd.DataFrame({
         'datetime_col': [datetime(2020, 1, 1)],
+        'datetime_col_tz': [datetime(2020, 1, 1, tzinfo=timezone.utc)],
         'timedelta_col': [timedelta(days=5)],
         'complex_col': [1 + 2j],
         'period_col': pd.Series([pd.Period('2021-01')]),
@@ -206,6 +196,7 @@ def test_problematic_datatypes(screen: Screen):
 
     screen.open('/')
     screen.should_contain('Datetime_col')
+    screen.should_contain('Datetime_col_tz')
     screen.should_contain('Timedelta_col')
     screen.should_contain('Complex_col')
     screen.should_contain('Period_col')
@@ -213,3 +204,70 @@ def test_problematic_datatypes(screen: Screen):
     screen.should_contain('5 days')
     screen.should_contain('(1+2j)')
     screen.should_contain('2021-01')
+
+
+def test_run_row_method(screen: Screen):
+    grid = ui.aggrid({
+        'columnDefs': [{'field': 'name'}, {'field': 'age'}],
+        'rowData': [{'name': 'Alice', 'age': 18}],
+        ':getRowId': '(params) => params.data.name',
+    })
+    ui.button('Update', on_click=lambda: grid.run_row_method('Alice', 'setDataValue', 'age', 42))
+
+    screen.open('/')
+    screen.should_contain('Alice')
+    screen.should_contain('18')
+
+    screen.click('Update')
+    screen.should_contain('Alice')
+    screen.should_contain('42')
+
+
+def test_run_method_with_function(screen: Screen):
+    @ui.page('/')
+    def page():
+        grid = ui.aggrid({'columnDefs': [{'field': 'name'}], 'rowData': [{'name': 'Alice'}, {'name': 'Bob'}]})
+
+        async def print_row(index: int) -> None:
+            ui.label(f'Row {index}: {await grid.run_grid_method(f"(g) => g.getDisplayedRowAtIndex({index}).data")}')
+
+        ui.button('Print Row 0', on_click=lambda: print_row(0))
+
+    screen.open('/')
+    screen.click('Print Row 0')
+    screen.should_contain("Row 0: {'name': 'Alice'}")
+
+
+def test_get_client_data(screen: Screen):
+    data: List = []
+
+    @ui.page('/')
+    def page():
+        grid = ui.aggrid({
+            'columnDefs': [
+                {'field': 'name'},
+                {'field': 'age', 'sort': 'desc'},
+            ],
+            'rowData': [
+                {'name': 'Alice', 'age': 18},
+                {'name': 'Bob', 'age': 21},
+                {'name': 'Carol', 'age': 42},
+            ],
+        })
+
+        async def get_data():
+            data[:] = await grid.get_client_data()
+        ui.button('Get Data', on_click=get_data)
+
+        async def get_sorted_data():
+            data[:] = await grid.get_client_data(method='filtered_sorted')
+        ui.button('Get Sorted Data', on_click=get_sorted_data)
+
+    screen.open('/')
+    screen.click('Get Data')
+    screen.wait(0.5)
+    assert data == [{'name': 'Alice', 'age': 18}, {'name': 'Bob', 'age': 21}, {'name': 'Carol', 'age': 42}]
+
+    screen.click('Get Sorted Data')
+    screen.wait(0.5)
+    assert data == [{'name': 'Carol', 'age': 42}, {'name': 'Bob', 'age': 21}, {'name': 'Alice', 'age': 18}]

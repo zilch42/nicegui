@@ -1,10 +1,15 @@
 from typing import Set
 
+import pytest
 import requests
 
 from nicegui import __version__
+from nicegui.testing import Screen
 
-from .screen import Screen
+
+@pytest.fixture(autouse=True)
+def activate_fastapi_docs(screen: Screen):
+    screen.ui_run_kwargs['fastapi_docs'] = True
 
 
 def get_openapi_paths() -> Set[str]:
@@ -28,6 +33,7 @@ def test_endpoint_documentation_internal_only(screen: Screen):
     assert get_openapi_paths() == {
         f'/_nicegui/{__version__}/libraries/{{key}}',
         f'/_nicegui/{__version__}/components/{{key}}',
+        f'/_nicegui/{__version__}/resources/{{key}}/{{path}}',
     }
 
 
@@ -38,4 +44,5 @@ def test_endpoint_documentation_all(screen: Screen):
         '/',
         f'/_nicegui/{__version__}/libraries/{{key}}',
         f'/_nicegui/{__version__}/components/{{key}}',
+        f'/_nicegui/{__version__}/resources/{{key}}/{{path}}',
     }

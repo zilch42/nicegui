@@ -25,9 +25,9 @@ We're always looking for bug fixes, performance improvements, and new features.
 
 The simplest way to setup a fully functioning development environment is to start our Dev Container in VS Code:
 
-1. Ensure you have VS Code, Docker and the Remote-Containers extension installed.
+1. Ensure you have VS Code, Docker and the Dev Containers extension installed.
 2. Open the project root directory in VS Code.
-3. Press `F1`, type `Remote-Containers: Open Folder in Container`, and hit enter (or use the bottom-left corner icon in VS Code to reopen in container).
+3. Press `F1`, type `Dev Containers: Open Folder in Container`, and hit enter (or use the bottom-left corner icon in VS Code to reopen in container).
 4. Wait until image has been build.
 5. Happy coding.
 
@@ -71,18 +71,66 @@ To view the log output, use the command
 ./docker.sh log
 ```
 
-## Code formatting
+## Coding Style Guide
+
+### Formatting
 
 We use [autopep8](https://github.com/hhatto/autopep8) with a 120 character line length to format our code.
 Before submitting a pull request, please run
 
 ```bash
-autopep8 --max-line-length=120 --experimental  --in-place --recursive .
+autopep8 --max-line-length=120 --in-place --recursive .
 ```
 
 on your code to ensure that it meets our formatting guidelines.
 Alternatively you can use VSCode, open the nicegui.code-workspace file and install the recommended extensions.
 Then the formatting rules are applied whenever you save a file.
+
+In our point of view, the Black formatter is sometimes a bit too strict.
+There are cases where one or the other arrangement of, e.g., function arguments is more readable than the other.
+Then we like the flexibility to either put all arguments on separate lines or only put the lengthy event handler
+on a second line and leave the other arguments as they are.
+
+### Linting
+
+We use [pre-commit](https://github.com/pre-commit/pre-commit) to make sure the coding style is enforced.
+You first need to install pre-commit and the corresponding git commit hooks by running the following commands:
+
+```bash
+python3 -m pip install pre-commit
+pre-commit install
+```
+
+After that you can make sure your code satisfies the coding style by running the following command:
+
+```bash
+pre-commit run --all-files
+```
+
+> [!TIP]
+> The command may fail with
+>
+> > RuntimeError: failed to find interpreter for Builtin discover of python_spec='python3.8'
+>
+> You will need to install Python 3.8 and make sure it is available in your `PATH`.
+
+These checks will also run automatically before every commit:
+
+- Run `ruff check . --fix` to check the code and sort imports.
+- Remove trailing whitespace.
+- Fix end of files.
+- Enforce single quotes.
+
+> [!NOTE]
+>
+> **Regarding single or double quotes:** > [PEP 8](https://peps.python.org/pep-0008/) doesn't give any recommendation, so we simply chose single quotes and sticked with it.
+> On qwerty keyboards it's a bit easier to type, is visually less cluttered, and it works well for strings containing double quotes from the English language.
+
+> [!NOTE]
+>
+> **We use f-strings** where ever possible because they are generally more readable - once you get used to them.
+> There are only a few places in the code base where performance really matters and f-strings might not be the best choice.
+> These places should be marked with a `# NOTE: ...` comment when diverging from f-string usage.
 
 ## Running tests
 
@@ -110,9 +158,10 @@ If you plan to implement a new element you can follow these suggestions:
 5. Look at other similar elements and how they are implemented in `nicegui/elements`.
 6. Create a new file with your new element alongside the existing ones.
 7. Make sure your element works as expected.
-8. Add documentation in [website/documentation.py](https://github.com/zauberzeug/nicegui/blob/main/website/documentation.py).
-   By calling the `element_demo(...)` function with an element as a parameter the docstring is used as a description.
+8. Add a documentation file in `website/documentation/content`.
+   By calling the `@doc.demo(...)` function with an element as a parameter the docstring is used as a description.
    The docstrings are written in restructured-text.
+   Refer to the new documentation page using `@doc.intro(...)` in any documentation section `website/documentation/content/section_*.py`.
 9. Create a pull-request (see below).
 
 ### Additional Demos
@@ -123,7 +172,7 @@ Please help us grow the number of insightful demos by following these easy steps
 1. Clone the NiceGUI repository and launch `main.py` in the root directory.
 2. Run `python3 -m pip install -e .` in the repository as explained above.
 3. In the newly opened browser window you can navigate to the documentation page where you want to change something.
-4. Open the code in your editor (for example [website/more_documentation/table_documentation.py](https://github.com/zauberzeug/nicegui/blob/main/website/more_documentation/table_documentation.py)).
+4. Open the code in your editor (for example [website/documentation/content/table_documentation.py](https://github.com/zauberzeug/nicegui/blob/main/website/documentation/content/table_documentation.py)).
 5. In the `more()` function insert an inner function containing your demo code.
 6. Add the `@text_demo` decorator to explain the demo.
 7. Make sure the result looks as expected in the rendered documentation.

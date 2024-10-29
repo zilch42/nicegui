@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
@@ -12,6 +13,7 @@ from . import background_tasks, binding, core, helpers
 from .client import Client
 from .favicon import create_favicon_route
 from .language import Language
+from .logging import log
 
 if TYPE_CHECKING:
     from .api_router import APIRouter
@@ -35,8 +37,12 @@ class page:
 
         This decorator marks a function to be a page builder.
         Each user accessing the given route will see a new instance of the page.
-        This means it is private to the user and not shared with others 
-        (as it is done `when placing elements outside of a page decorator <https://nicegui.io/documentation#auto-index_page>`_).
+        This means it is private to the user and not shared with others
+        (as it is done `when placing elements outside of a page decorator <https://nicegui.io/documentation/section_pages_routing#auto-index_page>`_).
+
+        Note:
+        The name of the decorated function is unused and can be anything.
+        The page route is determined by the `path` argument and registered globally.
 
         :param path: route of the new page (path must start with '/')
         :param title: optional page title
@@ -87,11 +93,20 @@ class page:
         core.app.remove_route(self.path)  # NOTE make sure only the latest route definition is used
         parameters_of_decorated_func = list(inspect.signature(func).parameters.keys())
 
+        def check_for_late_return_value(task: asyncio.Task) -> None:
+            try:
+                if task.result() is not None:
+                    log.error(f'ignoring {task.result()}; '
+                              'it was returned after the HTML had been delivered to the client')
+            except asyncio.CancelledError:
+                pass
+
+        @wraps(func)
         async def decorated(*dec_args, **dec_kwargs) -> Response:
             request = dec_kwargs['request']
             # NOTE cleaning up the keyword args so the signature is consistent with "func" again
             dec_kwargs = {k: v for k, v in dec_kwargs.items() if k in parameters_of_decorated_func}
-            with Client(self) as client:
+            with Client(self, request=request) as client:
                 if any(p.name == 'client' for p in inspect.signature(func).parameters.values()):
                     dec_kwargs['client'] = client
                 result = func(*dec_args, **dec_kwargs)
@@ -105,7 +120,11 @@ class page:
                     if time.time() > deadline:
                         raise TimeoutError(f'Response not ready after {self.response_timeout} seconds')
                     await asyncio.sleep(0.1)
-                result = task.result() if task.done() else None
+                if task.done():
+                    result = task.result()
+                else:
+                    result = None
+                    task.add_done_callback(check_for_late_return_value)
             if isinstance(result, Response):  # NOTE if setup returns a response, we don't need to render the page
                 return result
             binding._refresh_step()  # pylint: disable=protected-access

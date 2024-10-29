@@ -1,10 +1,9 @@
 from typing import Literal, Optional
 
-from . import context
+from .context import context
 from .element import Element
 from .elements.mixins.value_element import ValueElement
 from .functions.html import add_body_html
-from .logging import log
 
 DrawerSides = Literal['left', 'right']
 
@@ -34,6 +33,8 @@ class Header(ValueElement):
 
         This element is based on Quasar's `QHeader <https://quasar.dev/layout/header-and-footer#qheader-api>`_ component.
 
+        Like other layout elements, the header can not be nested inside other elements.
+
         Note: The header is automatically placed above other layout elements in the DOM to improve accessibility.
         To change the order, use the `move` method.
 
@@ -44,17 +45,17 @@ class Header(ValueElement):
         :param wrap: whether the header should wrap its content (default: `True`)
         :param add_scroll_padding: whether to automatically prevent link targets from being hidden behind the header (default: `True`)
         """
-        _check_current_slot()
-        with context.get_client().layout:
+        _check_current_slot(self)
+        with context.client.layout:
             super().__init__(tag='q-header', value=value, on_value_change=None)
         self._classes.append('nicegui-header')
         self._props['bordered'] = bordered
         self._props['elevated'] = elevated
         if wrap:
             self._classes.append('wrap')
-        code = list(self.client.layout._props['view'])
+        code = list(self.client.layout.props['view'])
         code[1] = 'H' if fixed else 'h'
-        self.client.layout._props['view'] = ''.join(code)
+        self.client.layout.props['view'] = ''.join(code)
 
         self.move(target_index=0)
 
@@ -97,6 +98,8 @@ class Drawer(Element):
 
         This element is based on Quasar's `QDrawer <https://quasar.dev/layout/drawer>`_ component.
 
+        Like other layout elements, a drawer can not be nested inside other elements.
+
         Note: Depending on the side, the drawer is automatically placed above or below the main page container in the DOM to improve accessibility.
         To change the order, use the `move` method.
 
@@ -108,8 +111,8 @@ class Drawer(Element):
         :param top_corner: whether the drawer expands into the top corner (default: `False`)
         :param bottom_corner: whether the drawer expands into the bottom corner (default: `False`)
         """
-        _check_current_slot()
-        with context.get_client().layout:
+        _check_current_slot(self)
+        with context.client.layout:
             super().__init__('q-drawer')
         if value is None:
             self._props['show-if-above'] = True
@@ -119,11 +122,11 @@ class Drawer(Element):
         self._props['bordered'] = bordered
         self._props['elevated'] = elevated
         self._classes.append('nicegui-drawer')
-        code = list(self.client.layout._props['view'])
+        code = list(self.client.layout.props['view'])
         code[0 if side == 'left' else 2] = side[0].lower() if top_corner else 'h'
         code[4 if side == 'left' else 6] = side[0].upper() if fixed else side[0].lower()
         code[8 if side == 'left' else 10] = side[0].lower() if bottom_corner else 'f'
-        self.client.layout._props['view'] = ''.join(code)
+        self.client.layout.props['view'] = ''.join(code)
 
         page_container_index = self.client.layout.default_slot.children.index(self.client.page_container)
         self.move(target_index=page_container_index if side == 'left' else page_container_index + 1)
@@ -153,6 +156,8 @@ class LeftDrawer(Drawer):
         """Left drawer
 
         This element is based on Quasar's `QDrawer <https://quasar.dev/layout/drawer>`_ component.
+
+        Like other layout elements, the left drawer can not be nested inside other elements.
 
         Note: The left drawer is automatically placed above the main page container in the DOM to improve accessibility.
         To change the order, use the `move` method.
@@ -186,6 +191,8 @@ class RightDrawer(Drawer):
 
         This element is based on Quasar's `QDrawer <https://quasar.dev/layout/drawer>`_ component.
 
+        Like other layout elements, the right drawer can not be nested inside other elements.
+
         Note: The right drawer is automatically placed below the main page container in the DOM to improve accessibility.
         To change the order, use the `move` method.
 
@@ -218,6 +225,8 @@ class Footer(ValueElement):
 
         This element is based on Quasar's `QFooter <https://quasar.dev/layout/header-and-footer#qfooter-api>`_ component.
 
+        Like other layout elements, the footer can not be nested inside other elements.
+
         Note: The footer is automatically placed below other layout elements in the DOM to improve accessibility.
         To change the order, use the `move` method.
 
@@ -227,17 +236,17 @@ class Footer(ValueElement):
         :param elevated: whether the footer should have a shadow (default: `False`)
         :param wrap: whether the footer should wrap its content (default: `True`)
         """
-        _check_current_slot()
-        with context.get_client().layout:
+        _check_current_slot(self)
+        with context.client.layout:
             super().__init__(tag='q-footer', value=value, on_value_change=None)
         self.classes('nicegui-footer')
         self._props['bordered'] = bordered
         self._props['elevated'] = elevated
         if wrap:
             self._classes.append('wrap')
-        code = list(self.client.layout._props['view'])
+        code = list(self.client.layout.props['view'])
         code[9] = 'F' if fixed else 'f'
-        self.client.layout._props['view'] = ''.join(code)
+        self.client.layout.props['view'] = ''.join(code)
 
         self.move(target_index=-1)
 
@@ -256,22 +265,30 @@ class Footer(ValueElement):
 
 class PageSticky(Element):
 
-    def __init__(self, position: PageStickyPositions = 'bottom-right', x_offset: float = 0, y_offset: float = 0) -> None:
+    def __init__(self,
+                 position: PageStickyPositions = 'bottom-right',
+                 x_offset: float = 0,
+                 y_offset: float = 0,
+                 *,
+                 expand: bool = False) -> None:
         """Page sticky
 
-        A sticky element that is always visible at the bottom of the page.
+        This element is based on Quasar's `QPageSticky <https://quasar.dev/layout/page-sticky>`_ component.
 
-        :param position: position of the sticky element (default: `'bottom-right'`)
-        :param x_offset: horizontal offset of the sticky element (default: `0`)
-        :param y_offset: vertical offset of the sticky element (default: `0`)
+        :param position: position on the screen (default: "bottom-right")
+        :param x_offset: horizontal offset (default: 0)
+        :param y_offset: vertical offset (default: 0)
+        :param expand: whether to fully expand instead of shrinking to fit the content (default: ``False``)
         """
         super().__init__('q-page-sticky')
         self._props['position'] = position
         self._props['offset'] = [x_offset, y_offset]
+        if expand:
+            self._props['expand'] = True
 
 
-def _check_current_slot() -> None:
-    parent = context.get_slot().parent
+def _check_current_slot(element: Element) -> None:
+    parent = context.slot.parent
     if parent != parent.client.content:
-        log.warning('Layout elements should not be nested but must be direct children of the page content. '
-                    'This will be raising an exception in NiceGUI 1.5')  # DEPRECATED
+        raise RuntimeError(f'Found top level layout element "{element.__class__.__name__}" inside element "{parent.__class__.__name__}". '
+                           'Top level layout elements can not be nested but must be direct children of the page content.')

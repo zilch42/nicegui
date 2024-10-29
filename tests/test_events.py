@@ -6,8 +6,7 @@ from selenium.webdriver.common.by import By
 
 from nicegui import ui
 from nicegui.events import ClickEventArguments
-
-from .screen import Screen
+from nicegui.testing import Screen
 
 
 def click_sync_no_args():
@@ -164,16 +163,31 @@ def test_throttling_variants(screen: Screen):
 
 @pytest.mark.parametrize('attribute', ['disabled', 'hidden'])
 def test_server_side_validation(screen: Screen, attribute: Literal['disabled', 'hidden']):
-    b = ui.button('Button', on_click=lambda: ui.label('Success'))
+    b = ui.button('Button', on_click=lambda: ui.label('Button clicked'))
+    n = ui.number('Number', on_change=lambda: ui.label('Number changed'))
     if attribute == 'disabled':
         b.disable()
+        n.disable()
     else:
         b.set_visibility(False)
-    ui.button('Hack', on_click=lambda: ui.run_javascript(f'''
-        getElement({b.id}).$emit("click", {{"id": {b.id}, "listener_id": "{list(b._event_listeners.keys())[0]}"}});
+        n.set_visibility(False)
+    ui.button('Forbidden', on_click=lambda: ui.run_javascript(f'''
+        getElement({b.id}).$emit("click", {{"id": {b.id}, "listener_id": "{next(iter(b._event_listeners))}"}});
     '''))  # pylint: disable=protected-access
+    ui.button('Allowed', on_click=lambda: n.set_value(42))
 
     screen.open('/')
-    screen.click('Hack')
+    screen.click('Forbidden')
     screen.wait(0.5)
-    screen.should_not_contain('Success')
+    screen.should_not_contain('Button clicked')  # triggering the click event through JavaScript does not work
+
+    screen.click('Allowed')
+    screen.should_contain('Number changed')  # triggering the change event through Python works
+
+
+def test_js_handler(screen: Screen) -> None:
+    ui.button('Button').on('click', js_handler='() => document.body.appendChild(document.createTextNode("Click!"))')
+
+    screen.open('/')
+    screen.click('Button')
+    screen.should_contain('Click!')

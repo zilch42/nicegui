@@ -21,7 +21,7 @@ try:
         # webview depends on bottle which uses the deprecated CGI function (https://github.com/bottlepy/bottle/issues/1403)
         warnings.filterwarnings('ignore', category=DeprecationWarning)
         import webview
-    optional_features.register('native')
+    optional_features.register('webview')
 except ModuleNotFoundError:
     pass
 
@@ -42,6 +42,7 @@ def _open_window(
         'frameless': frameless,
         **core.app.native.window_args,
     }
+    webview.settings.update(**core.app.native.settings)
     window = webview.create_window(**window_kwargs)
     closed = Event()
     window.events.closed += closed.set
@@ -87,7 +88,7 @@ def _start_window_method_executor(window: webview.Window,
                     else:
                         log.error(f'window.{method_name} is not callable')
             except queue.Empty:
-                time.sleep(0.01)
+                time.sleep(0.016)  # NOTE: avoid issue https://github.com/zauberzeug/nicegui/issues/2482 on Windows
             except Exception:
                 log.exception(f'error in window.{method_name}')
 
@@ -104,7 +105,7 @@ def activate(host: str, port: int, title: str, width: int, height: int, fullscre
             time.sleep(0.1)
         _thread.interrupt_main()
 
-    if not optional_features.has('native'):
+    if not optional_features.has('webview'):
         log.error('Native mode is not supported in this configuration.\n'
                   'Please run "pip install pywebview" to use it.')
         sys.exit(1)

@@ -1,4 +1,4 @@
-import { JSONEditor } from "index";
+import { JSONEditor } from "standalone";
 
 export default {
   template: "<div></div>",
@@ -28,7 +28,16 @@ export default {
     },
     destroyEditor() {
       if (this.editor) {
-        this.editor.dispose();
+        this.editor.destroy();
+      }
+    },
+    run_editor_method(name, ...args) {
+      if (this.editor) {
+        if (name.startsWith(":")) {
+          name = name.slice(1);
+          args = args.map((arg) => new Function(`return (${arg})`)());
+        }
+        return runMethod(this.editor, name, args);
       }
     },
   },

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, TypeVar, Union, cast
 
-from typing_extensions import ParamSpec, Self
+from typing_extensions import Concatenate, ParamSpec, Self
 
 from .. import background_tasks, core
 from ..client import Client
@@ -11,6 +11,7 @@ from ..dataclasses import KWONLY_SLOTS
 from ..element import Element
 from ..helpers import is_coroutine_function
 
+_S = TypeVar('_S')
 _T = TypeVar('_T')
 _P = ParamSpec('_P')
 
@@ -86,8 +87,12 @@ class refreshable(Generic[_P, _T]):
         self.targets.append(target)
         return target.run(self.func)
 
-    def refresh(self, *args: _P.args, **kwargs: _P.kwargs) -> None:
-        """Refresh the UI elements created by this function."""
+    def refresh(self, *args: Any, **kwargs: Any) -> None:
+        """Refresh the UI elements created by this function.
+
+        This method accepts the same arguments as the function itself or a subset of them.
+        It will combine the arguments passed to the function with the arguments passed to this method.
+        """
         self.prune()
         for target in self.targets:
             if target.instance != self.instance:
@@ -123,6 +128,17 @@ class refreshable(Generic[_P, _T]):
         ]
 
 
+class refreshable_method(Generic[_S, _P, _T], refreshable[_P, _T]):
+
+    def __init__(self, func: Callable[Concatenate[_S, _P], Union[_T, Awaitable[_T]]]) -> None:
+        """Refreshable UI methods
+
+        The `@ui.refreshable_method` decorator allows you to create methods that have a `refresh` method.
+        This method will automatically delete all elements created by the function and recreate them.
+        """
+        super().__init__(func)  # type: ignore
+
+
 def state(value: Any) -> Tuple[Any, Callable[[Any], None]]:
     """Create a state variable that automatically updates its refreshable UI container.
 
@@ -138,6 +154,8 @@ def state(value: Any) -> Tuple[Any, Callable[[Any], None]]:
         value = target.locals[target.next_index]
 
     def set_value(new_value: Any, index=target.next_index) -> None:
+        if target.locals[index] == new_value:
+            return
         target.locals[index] = new_value
         target.refreshable.refresh()
 

@@ -1,26 +1,50 @@
+from __future__ import annotations
+
 import asyncio
 import gzip
+import json
+import logging
 import re
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
+from uuid import uuid4
 
-import httpx
 import socketio
 import socketio.exceptions
 
 from . import background_tasks, core
 from .client import Client
+from .dataclasses import KWONLY_SLOTS
+from .elements.timer import Timer as timer
 from .logging import log
 
+if TYPE_CHECKING:
+    import httpx
+
 RELAY_HOST = 'https://on-air.nicegui.io/'
+
+
+@dataclass(**KWONLY_SLOTS)
+class Stream:
+    data: AsyncIterator[bytes]
+    response: httpx.Response
 
 
 class Air:
 
     def __init__(self, token: str) -> None:
+        import httpx  # pylint: disable=import-outside-toplevel
+
+        self.log = logging.getLogger('nicegui.air')
         self.token = token
         self.relay = socketio.AsyncClient()
         self.client = httpx.AsyncClient(app=core.app)
+        self.streaming_client = httpx.AsyncClient()
         self.connecting = False
+        self.streams: Dict[str, Stream] = {}
+        self.remote_url: Optional[str] = None
+
+        timer(5, self.connect)  # ensure we stay connected
 
         @self.relay.on('http')
         async def _handle_http(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -52,10 +76,48 @@ class Air:
                 'content': compressed,
             }
 
+        @self.relay.on('range-request')
+        async def _handle_range_request(data: Dict[str, Any]) -> Dict[str, Any]:
+            headers: Dict[str, Any] = data['headers']
+            url = next(iter(u for u in core.app.urls if self.remote_url != u)) + data['path']
+            data['params']['nicegui_chunk_size'] = 1024
+            request = self.client.build_request(
+                data['method'],
+                url,
+                params=data['params'],
+                headers=headers,
+            )
+            response = await self.streaming_client.send(request, stream=True)
+            stream_id = str(uuid4())
+            self.streams[stream_id] = Stream(data=response.aiter_bytes(), response=response)
+            return {
+                'status_code': response.status_code,
+                'headers': response.headers.multi_items(),
+                'stream_id': stream_id,
+            }
+
+        @self.relay.on('read-stream')
+        async def _handle_read_stream(stream_id: str) -> Optional[bytes]:
+            try:
+                return await self.streams[stream_id].data.__anext__()
+            except StopAsyncIteration:
+                await _handle_close_stream(stream_id)
+                return None
+            except Exception:
+                await _handle_close_stream(stream_id)
+                raise
+
+        @self.relay.on('close-stream')
+        async def _handle_close_stream(stream_id: str) -> None:
+            await self.streams[stream_id].response.aclose()
+            del self.streams[stream_id]
+
         @self.relay.on('ready')
         def _handle_ready(data: Dict[str, Any]) -> None:
             core.app.urls.add(data['device_url'])
-            print(f'NiceGUI is on air at {data["device_url"]}', flush=True)
+            self.remote_url = data['device_url']
+            if core.app.config.show_welcome_message:
+                print(f'NiceGUI is on air at {data["device_url"]}', flush=True)
 
         @self.relay.on('error')
         def _handleerror(data: Dict[str, Any]) -> None:
@@ -68,6 +130,7 @@ class Air:
                 return False
             client = Client.instances[client_id]
             client.environ = data['environ']
+            client.tab_id = data['tab_id']
             client.on_air = True
             client.handle_handshake()
             return True
@@ -85,8 +148,11 @@ class Air:
             if client_id not in Client.instances:
                 return
             client = Client.instances[client_id]
-            if isinstance(data['msg']['args'], dict) and 'socket_id' in data['msg']['args']:
-                data['msg']['args']['socket_id'] = client_id  # HACK: translate socket_id of ui.scene's init event
+            args = data['msg']['args']
+            if args and isinstance(args[0], str) and args[0].startswith('{"socket_id":'):
+                arg0 = json.loads(args[0])
+                arg0['socket_id'] = client_id  # HACK: translate socket_id of ui.scene's init event
+                args[0] = json.dumps(arg0)
             client.handle_event(data['msg'])
 
         @self.relay.on('javascript_response')
@@ -109,33 +175,48 @@ class Air:
     async def connect(self) -> None:
         """Connect to the NiceGUI On Air server."""
         if self.connecting:
+            self.log.debug('Already connecting.')
             return
+        if self.relay.connected:
+            return
+        self.log.debug('Going to connect...')
         self.connecting = True
         backoff_time = 1
-        while True:
-            try:
-                if self.relay.connected:
-                    await self.relay.disconnect()
-                await self.relay.connect(
-                    f'{RELAY_HOST}?device_token={self.token}',
-                    socketio_path='/on_air/socket.io',
-                    transports=['websocket', 'polling'],  # favor websocket over polling
-                )
-                break
-            except socketio.exceptions.ConnectionError:
-                pass
-            except ValueError:  # NOTE this sometimes happens when the internal socketio client is not yet ready
-                await self.relay.disconnect()
-            except Exception:
-                log.exception('Could not connect to NiceGUI On Air server.')
+        try:
+            while True:
+                try:
+                    if self.relay.connected:
+                        await asyncio.wait_for(self.disconnect(), timeout=5)
+                    self.log.debug('Connecting...')
+                    await self.relay.connect(
+                        f'{RELAY_HOST}?device_token={self.token}',
+                        socketio_path='/on_air/socket.io',
+                        transports=['websocket', 'polling'],  # favor websocket over polling
+                    )
+                    self.log.debug('Connected.')
+                    break
+                except socketio.exceptions.ConnectionError:
+                    self.log.debug('Connection error.', stack_info=True)
+                except ValueError:  # NOTE this sometimes happens when the internal socketio client is not yet ready
+                    self.log.debug('ValueError while connecting.', stack_info=True)
+                except Exception:
+                    log.exception('Could not connect to NiceGUI On Air server.')
 
-            await asyncio.sleep(backoff_time)
-            backoff_time = min(backoff_time * 2, 32)
-        self.connecting = False
+                self.log.debug(f'Retrying in {backoff_time} seconds...')
+                await asyncio.sleep(backoff_time)
+                backoff_time = min(backoff_time * 2, 32)
+        finally:
+            self.connecting = False
 
     async def disconnect(self) -> None:
         """Disconnect from the NiceGUI On Air server."""
-        await self.relay.disconnect()
+        self.log.debug('Disconnecting...')
+        if self.relay.connected:
+            await self.relay.disconnect()
+        for stream in self.streams.values():
+            await stream.response.aclose()
+        self.streams.clear()
+        self.log.debug('Disconnected.')
 
     async def emit(self, message_type: str, data: Dict[str, Any], room: str) -> None:
         """Emit a message to the NiceGUI On Air server."""
@@ -150,16 +231,13 @@ class Air:
         return target_id in core.sio.manager.rooms
 
 
-instance: Optional[Air] = None
-
-
 def connect() -> None:
     """Connect to the NiceGUI On Air server if there is an air instance."""
-    if instance:
-        background_tasks.create(instance.connect())
+    if core.air:
+        background_tasks.create(core.air.connect())
 
 
 def disconnect() -> None:
     """Disconnect from the NiceGUI On Air server if there is an air instance."""
-    if instance:
-        background_tasks.create(instance.disconnect())
+    if core.air:
+        background_tasks.create(core.air.disconnect())

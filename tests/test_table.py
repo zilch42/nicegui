@@ -1,10 +1,11 @@
+from datetime import datetime, timedelta, timezone
 from typing import List
 
+import pandas as pd
 from selenium.webdriver.common.by import By
 
 from nicegui import ui
-
-from .screen import Screen
+from nicegui.testing import Screen
 
 
 def columns() -> List:
@@ -71,8 +72,8 @@ def test_filter(screen: Screen):
 
 def test_add_remove(screen: Screen):
     table = ui.table(columns=columns(), rows=rows())
-    ui.button('Add', on_click=lambda: table.add_rows({'id': 3, 'name': 'Carol', 'age': 32}))
-    ui.button('Remove', on_click=lambda: table.remove_rows(table.rows[0]))
+    ui.button('Add', on_click=lambda: table.add_row({'id': 3, 'name': 'Carol', 'age': 32}))
+    ui.button('Remove', on_click=lambda: table.remove_row(table.rows[0]))
 
     screen.open('/')
     screen.click('Add')
@@ -128,7 +129,7 @@ def test_dynamic_column_attributes(screen: Screen):
 
 def test_remove_selection(screen: Screen):
     t = ui.table(columns=columns(), rows=rows(), selection='single')
-    ui.button('Remove first row', on_click=lambda: t.remove_rows(t.rows[0]))
+    ui.button('Remove first row', on_click=lambda: t.remove_row(t.rows[0]))
 
     screen.open('/')
     screen.find('Alice').find_element(By.XPATH, 'preceding-sibling::td').click()
@@ -143,18 +144,177 @@ def test_remove_selection(screen: Screen):
 def test_replace_rows(screen: Screen):
     t = ui.table(columns=columns(), rows=rows())
 
-    def replace_rows():
+    def replace_rows_with_carol():
         t.rows = [{'id': 3, 'name': 'Carol', 'age': 32}]
-    ui.button('Replace rows', on_click=replace_rows)
+
+    def replace_rows_with_daniel():
+        t.update_rows([{'id': 4, 'name': 'Daniel', 'age': 33}])
+
+    ui.button('Replace rows with C.', on_click=replace_rows_with_carol)
+    ui.button('Replace rows with D.', on_click=replace_rows_with_daniel)
 
     screen.open('/')
     screen.should_contain('Alice')
     screen.should_contain('Bob')
     screen.should_contain('Lionel')
 
-    screen.click('Replace rows')
+    screen.click('Replace rows with C.')
     screen.wait(0.5)
     screen.should_not_contain('Alice')
     screen.should_not_contain('Bob')
     screen.should_not_contain('Lionel')
     screen.should_contain('Carol')
+
+    screen.click('Replace rows with D.')
+    screen.wait(0.5)
+    screen.should_not_contain('Carol')
+    screen.should_contain('Daniel')
+
+
+def test_create_and_update_from_pandas(screen: Screen):
+    df = pd.DataFrame({'name': ['Alice', 'Bob'], 'age': [18, 21]})
+    table = ui.table.from_pandas(df)
+
+    def update():
+        df.loc[2] = ['Lionel', 19]
+        table.update_from_pandas(df)
+    ui.button('Update', on_click=update)
+
+    screen.open('/')
+    screen.should_contain('Alice')
+    screen.should_contain('Bob')
+    screen.should_contain('18')
+    screen.should_contain('21')
+
+    screen.click('Update')
+    screen.should_contain('Lionel')
+    screen.should_contain('19')
+
+
+def test_problematic_datatypes(screen: Screen):
+    df = pd.DataFrame({
+        'Datetime_col': [datetime(2020, 1, 1)],
+        'Datetime_col_tz': [datetime(2020, 1, 1, tzinfo=timezone.utc)],
+        'Timedelta_col': [timedelta(days=5)],
+        'Complex_col': [1 + 2j],
+        'Period_col': pd.Series([pd.Period('2021-01')]),
+    })
+    ui.table.from_pandas(df)
+
+    screen.open('/')
+    screen.should_contain('Datetime_col')
+    screen.should_contain('Datetime_col_tz')
+    screen.should_contain('Timedelta_col')
+    screen.should_contain('Complex_col')
+    screen.should_contain('Period_col')
+    screen.should_contain('2020-01-01')
+    screen.should_contain('5 days')
+    screen.should_contain('(1+2j)')
+    screen.should_contain('2021-01')
+
+
+def test_table_computed_props(screen: Screen):
+    all_rows = rows()
+    filtered_rows = [row for row in all_rows if 'e' in row['name']]
+    filtered_sorted_rows = sorted(filtered_rows, key=lambda row: row['age'], reverse=True)
+
+    @ui.page('/')
+    async def page():
+        table = ui.table(
+            columns=columns(),
+            rows=all_rows,
+            row_key='id',
+            selection='multiple',
+            pagination={'rowsPerPage': 1, 'sortBy': 'age', 'descending': True})
+        table.filter = 'e'
+
+        await ui.context.client.connected()
+        assert filtered_sorted_rows == await table.get_filtered_sorted_rows()
+        assert filtered_sorted_rows[:1] == await table.get_computed_rows()
+        assert len(filtered_sorted_rows) == await table.get_computed_rows_number()
+
+    screen.open('/')
+    screen.should_contain('Lionel')
+    screen.should_not_contain('Alice')
+    screen.should_not_contain('Bob')
+
+
+def test_infer_columns(screen: Screen):
+    ui.table(rows=[
+        {'name': 'Alice', 'age': 18},
+        {'name': 'Bob', 'age': 21},
+    ])
+
+    screen.open('/')
+    screen.should_contain('NAME')
+    screen.should_contain('AGE')
+    screen.should_contain('Alice')
+    screen.should_contain('Bob')
+    screen.should_contain('18')
+    screen.should_contain('21')
+
+
+def test_default_column_parameters(screen: Screen):
+    ui.table(rows=[
+        {'name': 'Alice', 'age': 18, 'city': 'London'},
+        {'name': 'Bob', 'age': 21, 'city': 'Paris'},
+    ], columns=[
+        {'name': 'name', 'label': 'Name', 'field': 'name'},
+        {'name': 'age', 'label': 'Age', 'field': 'age'},
+        {'name': 'city', 'label': 'City', 'field': 'city', 'sortable': False},
+    ], column_defaults={'sortable': True})
+
+    screen.open('/')
+    screen.should_contain('Name')
+    screen.should_contain('Age')
+    screen.should_contain('Alice')
+    screen.should_contain('Bob')
+    screen.should_contain('18')
+    screen.should_contain('21')
+    screen.should_contain('London')
+    screen.should_contain('Paris')
+    assert len(screen.find_all_by_class('sortable')) == 2
+
+
+def test_columns_from_df(screen: Screen):
+    persons = ui.table.from_pandas(pd.DataFrame({'name': ['Alice', 'Bob'], 'age': [18, 21]}))
+    cars = ui.table.from_pandas(pd.DataFrame({'make': ['Ford', 'Toyota'], 'model': ['Focus', 'Corolla']}),
+                                columns=[{'name': 'make', 'label': 'make', 'field': 'make'}])
+
+    ui.button('Update persons without columns',
+              on_click=lambda: persons.update_from_pandas(pd.DataFrame({'name': ['Dan'], 'age': [5], 'sex': ['male']})))
+
+    ui.button('Update persons with columns',
+              on_click=lambda: persons.update_from_pandas(pd.DataFrame({'name': ['Stephen'], 'age': [33]}),
+                                                          columns=[{'name': 'name', 'label': 'Name', 'field': 'name'}]))
+
+    ui.button('Update cars without columns',
+              on_click=lambda: cars.update_from_pandas(pd.DataFrame({'make': ['Honda'], 'model': ['Civic']})))
+
+    ui.button('Update cars with columns',
+              on_click=lambda: cars.update_from_pandas(pd.DataFrame({'make': ['Hyundai'], 'model': ['i30']}),
+                                                       columns=[{'name': 'make', 'label': 'make', 'field': 'make'},
+                                                                {'name': 'model', 'label': 'model', 'field': 'model'}]))
+
+    screen.open('/')
+    screen.should_contain('name')
+    screen.should_contain('age')
+    screen.should_contain('make')
+    screen.should_not_contain('model')
+
+    screen.click('Update persons without columns')  # infer columns (like during instantiation)
+    screen.should_contain('Dan')
+    screen.should_contain('5')
+    screen.should_contain('male')
+
+    screen.click('Update persons with columns')  # updated columns via parameter
+    screen.should_contain('Stephen')
+    screen.should_not_contain('32')
+
+    screen.click('Update cars without columns')  # don't change columns
+    screen.should_contain('Honda')
+    screen.should_not_contain('Civic')
+
+    screen.click('Update cars with columns')  # updated columns via parameter
+    screen.should_contain('Hyundai')
+    screen.should_contain('i30')

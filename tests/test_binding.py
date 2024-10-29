@@ -1,19 +1,20 @@
+from typing import Dict, Optional, Tuple
+
 from selenium.webdriver.common.keys import Keys
 
 from nicegui import ui
-
-from .screen import Screen
+from nicegui.testing import Screen
 
 
 def test_ui_select_with_tuple_as_key(screen: Screen):
     class Model:
-        selection = None
+        selection: Optional[Tuple[int, int]] = None
     data = Model()
     options = {
         (2, 1): 'option A',
         (1, 2): 'option B',
     }
-    data.selection = list(options.keys())[0]
+    data.selection = next(iter(options))
     ui.select(options).bind_value(data, 'selection')
 
     screen.open('/')
@@ -94,3 +95,12 @@ def test_binding_refresh_before_page_delivery(screen: Screen):
 
     screen.open('/')
     screen.should_contain('1')
+
+
+def test_missing_target_attribute(screen: Screen):
+    data: Dict = {}
+    ui.label('Hello').bind_text_to(data)
+    ui.label().bind_text_from(data, 'text', lambda text: f'{text=}')
+
+    screen.open('/')
+    screen.should_contain("text='Hello'")

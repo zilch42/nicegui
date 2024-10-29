@@ -1,3 +1,4 @@
+import "ag-grid-community";
 import { convertDynamicProperties } from "../../static/utils/dynamic_properties.js";
 
 export default {
@@ -8,10 +9,7 @@ export default {
   methods: {
     update_grid() {
       this.$el.textContent = "";
-      this.gridOptions = {
-        ...this.options,
-        onGridReady: this.auto_size_columns ? (params) => params.api.sizeColumnsToFit() : undefined,
-      };
+      this.gridOptions = { ...this.options };
       for (const column of this.html_columns) {
         if (this.gridOptions.columnDefs[column].cellRenderer === undefined) {
           this.gridOptions.columnDefs[column].cellRenderer = (params) => (params.value ? params.value : "");
@@ -44,16 +42,19 @@ export default {
         checkboxRenderer: CheckboxRenderer,
       };
 
-      this.grid = new agGrid.Grid(this.$el, this.gridOptions);
-      this.gridOptions.api.addGlobalListener(this.handle_event);
+      this.api = agGrid.createGrid(this.$el, this.gridOptions);
+      this.api.addGlobalListener(this.handle_event);
     },
-    call_api_method(name, ...args) {
-      return this.gridOptions.api[name](...args);
+    run_grid_method(name, ...args) {
+      return runMethod(this.api, name, args);
     },
-    call_column_api_method(name, ...args) {
-      return this.gridOptions.columnApi[name](...args);
+    run_row_method(row_id, name, ...args) {
+      return runMethod(this.api.getRowNode(row_id), name, args);
     },
     handle_event(type, args) {
+      if ((type === "gridReady" || type === "gridSizeChanged") && this.auto_size_columns) {
+        this.api.sizeColumnsToFit();
+      }
       this.$emit(type, {
         value: args.value,
         oldValue: args.oldValue,

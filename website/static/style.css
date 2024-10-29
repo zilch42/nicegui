@@ -20,7 +20,7 @@ html:not(.has-dialog) {
   font-family: "Fira Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     monospace;
 }
-em:not(.browser-window *) {
+.fancy-em em {
   font-style: normal;
   color: #5898d4;
 }
@@ -41,6 +41,19 @@ a:active:not(.browser-window *) {
   font-family: "Material Icons";
   font-weight: 100;
   vertical-align: -10%;
+}
+
+.rst-param-tables table {
+  text-align: left;
+  table-layout: auto;
+}
+.rst-param-tables table th,
+.rst-param-tables table td {
+  border-width: 0;
+  padding: 0;
+}
+.rst-param-tables table th {
+  padding-right: 1em;
 }
 
 .q-header {
@@ -119,7 +132,7 @@ dl.docinfo dd {
 }
 dl.field-list p,
 dl.docinfo p {
-  margin-bottom: 0;
+  margin: 0;
 }
 
 .dark-box {
